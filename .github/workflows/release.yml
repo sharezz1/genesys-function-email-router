@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Checks
+    if: ${{ !github.event.repository.is_template }}
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/pr-checks.yml
+    secrets: inherit
+
+  release:
+    name: Release
+    if: ${{ !github.event.repository.is_template }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs:
+      - checks
+    permissions:
+      contents: write
+    outputs:
+      should_release: ${{ steps.bump.outputs.released }}
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.4
+          cache: true
+      - name: Record the tag before bumping
+        id: before
+        run: echo "tag=$(git describe --tags --abbrev=0 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+      # Deliberately not gated on a dry run. `cog bump --auto` exits 0 whether or not it had
+      # anything to bump — it reports "No conventional commits ... required a bump" on stdout and
+      # succeeds — so a dry run cannot tell the two apart. Gating on its exit code let a run with
+      # only a `ci:` commit believe it had released, and `git describe --tags` then produced
+      # `v0.1.0-1-gabc1234`, a describe string rather than a tag, which the release job could not
+      # check out. Run the bump unconditionally and decide from the fact that settles it: whether a
+      # new tag now exists. Removing the dry run also means a genuine cog failure fails this job
+      # loudly instead of being swallowed by `continue-on-error`.
+      - name: Bump version
+        uses: cocogitto/cocogitto-action@v4
+        with:
+          command: bump
+          args: --auto
+      - name: Detect whether a release was cut
+        id: bump
+        run: |
+          tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -n "$tag" ] && [ "$tag" != "${{ steps.before.outputs.tag }}" ]; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "version=$tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Push release commit and tag
+        if: steps.bump.outputs.released == 'true'
+        run: git push && git push --tags
+
+  github-release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: release
+    if: needs.release.outputs.should_release == 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.version }}
+          fetch-depth: 0
+      - name: Generate changelog
+        id: changelog
+        uses: cocogitto/cocogitto-action@v4
+        with:
+          command: changelog
+          args: --at ${{ needs.release.outputs.version }}
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.4
+          cache: true
+      # Built here rather than carried from the Checks run: this checkout is the tag, so it
+      # includes the version bump, and the artifact is therefore the source the tag names.
+      - name: Build function zip
+        id: artifact
+        run: |
+          deno task build:genesys:zip
+          name="genesys-function-email-router-${{ needs.release.outputs.version }}.zip"
+          mv target/index.zip "target/$name"
+          echo "path=target/$name" >> "$GITHUB_OUTPUT"
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.release.outputs.version }}
+          body: ${{ steps.changelog.outputs.stdout }}
+          generate_release_notes: false
+          files: ${{ steps.artifact.outputs.path }}

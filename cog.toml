@@ -1,0 +1,43 @@
+from_latest_tag = true
+ignore_merge_commits = true
+tag_prefix = "v"
+pre_bump_hooks = [
+  """deno eval "const path='deno.json'; const cfg=JSON.parse(await Deno.readTextFile(path)); cfg.version='{{version}}'; await Deno.writeTextFile(path, JSON.stringify(cfg, null, 2) + '\\n');" """
+]
+
+# `remote`, `owner` and `repository` are a set: cog panics at bump time if any one of them is
+# missing, and `--dry-run` does not build the changelog context, so the dry-run gate passes and the
+# real bump is what crashes. Set all three or none.
+[changelog]
+path = "CHANGELOG.md"
+remote = "github.com"
+owner = "DanzigerGeist"
+repository = "genesys-function-email-router"
+
+# `cog bump` writes its own `chore(version): vX.Y.Z` commit, which then appears in the changelog it
+# just generated. Omission is per type rather than per scope, so this hides every chore — which is
+# why `.github/dependabot.yml` raises dependency updates as `build` instead, where they stay
+# visible under their own heading.
+[commit_types]
+chore = { changelog_title = "Miscellaneous Chores", omit_from_changelog = true }
+
+[git_hooks.commit-msg]
+script = """#!/bin/sh
+set -e
+cog verify --file "$1"
+"""
+
+[git_hooks.pre-commit]
+script = """#!/bin/sh
+set -e
+deno task check:format
+deno task check:lint
+"""
+
+[git_hooks.pre-push]
+script = """#!/bin/sh
+set -e
+deno task check
+deno task test:fast
+deno task security
+"""

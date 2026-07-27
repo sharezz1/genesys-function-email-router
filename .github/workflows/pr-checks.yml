@@ -1,0 +1,182 @@
+name: PR Checks
+
+on:
+  pull_request:
+  workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  commits:
+    name: Commits
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Conventional commits check
+        uses: wagoid/commitlint-github-action@v6
+
+  dependencies:
+    name: Dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.4
+          cache: true
+      - name: Verify dependencies and lockfile
+        run: deno ci
+
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs:
+      - dependencies
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.4
+          cache: true
+      - name: Check formatting
+        run: deno fmt --check
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs:
+      - dependencies
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.4
+          cache: true
+      - name: Run lint checks
+        run: deno lint
+
+  types:
+    name: Types
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs:
+      - dependencies
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.4
+          cache: true
+      - name: Type check
+        run: deno check src/ tests/ scripts/
+
+  examples:
+    name: Examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs:
+      - dependencies
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.4
+          cache: true
+      - name: Check examples
+        run: deno check --doc-only src/
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs:
+      - dependencies
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.4
+          cache: true
+      - name: Run tests
+        run: deno test tests/ --coverage=.coverage --parallel --quiet --no-prompt --allow-env --allow-sys --allow-read --permit-no-files
+      - name: Coverage
+        run: deno coverage .coverage
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs:
+      - dependencies
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.4
+          cache: true
+      - name: Build function zip
+        run: deno task build:genesys:zip
+
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs:
+      - dependencies
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.4
+          cache: true
+      - name: Audit dependencies
+        run: deno audit --frozen --level=high
+
+  secrets:
+    name: Secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
